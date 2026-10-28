@@ -1,0 +1,20 @@
+# News of Chennai's copy of Reclaim Chennai's Chennai GPS Camera (MIT licence).
+# Every Monday 2:30 am IST this pulls in Reclaim Chennai's latest version. Cloudflare Pages then builds it; if their new version
+# fails to build, Cloudflare keeps serving the last working copy, so the camera never breaks.
+name: Sync with Reclaim Chennai
+on:
+  schedule:
+    - cron: '0 21 * * 0'   # Sunday 21:00 UTC = Monday 02:30 IST
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Merge the latest version from reclaimchennai/chennai-gps-camera
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          out=$(gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main 2>&1) && echo "$out" || { echo "::warning::Could not merge automatically: $out"; exit 1; }
