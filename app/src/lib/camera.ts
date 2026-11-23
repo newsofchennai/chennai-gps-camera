@@ -13,7 +13,7 @@ import { qualityPlan } from "./quality";
 import { useSettingsStore } from "../store";
 import { measureLensFactor, snapFactor } from "./lens-calibrate";
 import { NativeEngine, NATIVE_ZOOM_CAP } from "./camera-native";
-import { nativeCamera, nativeCameraAvailable, type NativeCameraEntry } from "./nativeCamera";
+import { nativeCamera, nativeCameraAvailable, type NativeCameraEntry, type NativeStill } from "./nativeCamera";
 import { judgeLight, readLight, type LightReading } from "./lightmeter";
 
 export type FacingMode = "environment" | "user";
@@ -460,7 +460,11 @@ export class CameraController {
     if (this.engineFor(this.nativeWanted) === "native" && this.viewport) {
       if (hadWeb) await CameraController.settle(RELEASE_MS);
       const plan = qualityPlan();
-      const ok = await this.native.start(this.viewport, facing, plan.stillLongEdge);
+      const ok = await this.native.start(this.viewport, facing, plan.stillLongEdge, {
+        mode: this.frameShape,
+        recordLongEdge: plan.recordLongEdge,
+        recordBitrate: plan.videoBitsPerSecond,
+      });
       if (ok) {
         this.nativeFailures[facing] = 0;
         this.engine = "native";
@@ -626,7 +630,32 @@ export class CameraController {
    *  other engine, or a web stream opened in the other shape. */
   needsRestartFor(mode: "photo" | "video", nativeWanted: boolean): boolean {
     if (this.engineFor(nativeWanted) !== this.engine) return true;
-    return this.engine === "web" && this.stream != null && this.openShape !== mode;
+    if (this.engine === "native") return this.native.info?.mode != null && this.native.info.mode !== mode && !this.native.recordsVideo;
+    return this.stream != null && this.openShape !== mode;
+  }
+
+  /** The phone camera is up in the other mode and can change in place. */
+  canSwitchInPlace(mode: "photo" | "video", nativeWanted: boolean): boolean {
+    return (
+      this.engine === "native" &&
+      this.engineFor(nativeWanted) === "native" &&
+      this.native.recordsVideo &&
+      this.native.info?.mode !== mode
+    );
+  }
+
+  /**
+   * Photo <-> video on the phone camera without stopping it: the camera
+   * rebinds behind its last frame. Falls back to a full restart (the
+   * caller's) when the change is refused.
+   */
+  async switchModeInPlace(mode: "photo" | "video"): Promise<boolean> {
+    this.frameShape = mode;
+    const plan = qualityPlan();
+    return this.native.setMode(mode, {
+      longEdge: plan.recordLongEdge,
+      bitrate: plan.videoBitsPerSecond,
+    });
   }
 
   /** Zoom the user last asked for; survives a stream restart. */
@@ -2151,8 +2180,8 @@ export class CameraController {
    * A native still for how the phone is held (orientation.ts rotation),
    * as the path of the JPEG the camera wrote. The photo queue reads it.
    */
-  async captureNative(rotation: number): Promise<string> {
-    const path = await this.native.capture(rotation);
+  async captureNative(rotation: number): Promise<NativeStill> {
+    const still = await this.native.capture(rotation);
     const i = this.native.info;
     // stillW x stillH is the sensor's landscape frame; a portrait grip
     // stands it upright
@@ -2165,7 +2194,7 @@ export class CameraController {
       ms: this.native.lastCaptureMs ?? undefined,
       zsl: i?.zsl,
     };
-    return path;
+    return still;
   }
 
   /**
